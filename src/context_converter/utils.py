@@ -1,84 +1,57 @@
+"""
+Utility functions for file handling and dataset management.
+Maintains async I/O operations for better performance.
+"""
+
 import glob
 import json
-import logging
 import aiofiles
-import asyncio
-from converter import HTMLToMarkdownConverter
-from formatter import DatasetFormatter
-
+import logging
 
 async def load_json_files(pattern):
     """
-    Asynchronously loads JSON files matching the given pattern and aggregates their data.
-
+    Load and merge JSON files matching glob pattern.
+    
     Args:
-        pattern (str): The pattern to match JSON files.
-
+        pattern: File matching pattern (e.g., "data/*.json")
+        
     Returns:
-        list: The aggregated data from the JSON files, or an empty list if an error occurs.
+        Combined list of JSON entries
+    """
+    aggregated = []
+    for file_path in glob.glob(pattern):
+        try:
+            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+                content = await f.read()
+                aggregated.extend(json.loads(content))
+        except Exception as e:
+            logging.error(f"Failed to load {file_path}: {str(e)}")
+    return aggregated
+
+async def save_output_in_chunks(file_path, content):
+    """
+    Append processed content to output file.
+    
+    Args:
+        file_path: Output file path
+        content: Markdown content to append
     """
     try:
-        aggregated_data = []
-        for file_path in glob.glob(pattern):
-            async with aiofiles.open(file_path, "r", encoding="utf-8") as file:
-                data = await file.read()
-                aggregated_data.extend(json.loads(data))
-        return aggregated_data
+        async with aiofiles.open(file_path, "a", encoding="utf-8") as f:
+            await f.write(content + "\n\n")
     except Exception as e:
-        logging.error("Error loading JSON files: %s", e)
-        return []
-
-
-async def save_output_in_chunks(file_path, contents):
-    """
-    Asynchronously saves the given contents to the specified file path in chunks.
-
-    Args:
-        file_path (str): The path of the file to save the contents to.
-        contents (str): The contents to be saved to the file.
-
-    Returns:
-        None
-    """
-    try:
-        async with aiofiles.open(file_path, "a", encoding="utf-8") as file:
-            await file.write(contents)
-            await file.flush()
-            logging.info("Flushed file content: %s", file_path)
-    except Exception as e:
-        logging.error("Error saving output in chunks: %s", e)
-
+        logging.error(f"Failed to write output: {str(e)}")
 
 def chunk_dataset(data, chunk_size):
     """
-    Function to chunk a dataset into smaller parts based on the given chunk size.
-
+    Split dataset into manageable chunks.
+    
     Args:
-        data: The dataset to be chunked.
-        chunk_size: The size of each chunk.
-
+        data: Full dataset list
+        chunk_size: Entries per chunk
+        
     Yields:
-        The chunks of the dataset based on the chunk size.
-
-    Returns:
-        An empty list if an exception is caught during chunking.
+        Sequential chunks of dataset
     """
-    try:
-        for i in range(0, len(data), chunk_size):
-            yield data[i : i + chunk_size]
-    except Exception as e:
-        logging.error("Error chunking dataset: %s", e)
-        return []
-
-
-def process_chunk(chunk):
-    """
-    Process a chunk using a DatasetFormatter and return the formatted dataset.
-    If an exception occurs, log an error and return an empty string.
-    """
-    try:
-        formatter = DatasetFormatter(HTMLToMarkdownConverter())
-        return formatter.format_dataset(chunk)
-    except Exception as e:
-        logging.error("Error processing chunk: %s", e)
-        return ""
+    for i in range(0, len(data), chunk_size):
+        yield data[i:i + chunk_size]
