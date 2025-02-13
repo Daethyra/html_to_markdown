@@ -1,60 +1,99 @@
-import unittest
-from bs4 import BeautifulSoup
-from markdownify import markdownify as md
-from transformers import AutoTokenizer, AutoModel
-import torch
-import logging
-import os
-import sys
+"""
+Unit tests for HTMLToMarkdownConverter (properly escaped)
+"""
 
-# Get the absolute path of the parent directory
-parent_dir = os.path.dirname(os.path.abspath(__file__))
+import pytest
+from context_converter.converter import HTMLToMarkdownConverter
 
-# Add the parent directory to the system path
-sys.path.append(parent_dir)
+@pytest.fixture
+def converter():
+    return HTMLToMarkdownConverter()
 
-from conv_html_to_markdown.converter import HTMLToMarkdownConverter
+def test_headings(converter):
+    html = """
+    <h1>Main</h1>
+    <h2>Sub <span>heading</span></h2>
+    """
+    expected = r"""
+# Main
 
+## Sub heading
+    """.strip()
+    assert converter.convert(html) == expected
 
-class HTMLToMarkdownConverterTest(unittest.TestCase):
-    def setUp(self):
-        self.converter = HTMLToMarkdownConverter()
+def test_paragraphs(converter):
+    html = """
+    <p>First</p>
+    <p>Second<br>with<br/>breaks</p>
+    """
+    expected = "First\n\nSecond  \nwith  \nbreaks"
+    assert converter.convert(html) == expected
 
-    def test_initialize_embedding_model(self):
-        tokenizer, model = self.converter._initialize_embedding_model()
-        # Call a method on each object and assert that it behaves as expected
-        # For example:
-        tokens = tokenizer.encode("Hello world", return_tensors="pt")
-        self.assertIsInstance(tokens, torch.Tensor)
-        outputs = model(tokens)
-        self.assertIsInstance(outputs.last_hidden_state, torch.Tensor)
+def test_lists(converter):
+    html = """
+    <ul><li>Item</li></ul>
+    <ol start="2"><li>Ordered</li></ol>
+    """
+    expected = "- Item\n\n2. Ordered"
+    assert converter.convert(html) == expected
 
-    def test_curate_content(self):
-        html = '<html><head></head><body><div class="cookie">Cookie</div></body></html>'
-        expected_html = "<html><head></head><body></body></html>"
-        curated_html = self.converter._curate_content(html)
-        self.assertEqual(curated_html, expected_html)
+def test_tables(converter):
+    html = """
+    <table>
+      <tr><th>Head</th></tr>
+      <tr><td>Data</td></tr>
+    </table>
+    """
+    expected = "| Head |\n|------|\n| Data |"
+    assert converter.convert(html) == expected
 
-    def test_remove_selectors(self):
-        html = "<html><head></head><body><header>Header</header></body></html>"
-        expected_html = "<html><head></head><body></body></html>"
-        soup = BeautifulSoup(html, "html.parser")
-        self.converter._remove_selectors(soup)
-        self.assertEqual(str(soup), expected_html)
+def test_code_blocks(converter):
+    html = """
+    <pre><code class="language-py">print()</code></pre>
+    <code>inline</code>
+    """
+    expected = "```py\nprint()\n```\n\n`inline`"
+    assert converter.convert(html) == expected
 
-    def test_strip_tags(self):
-        html = "<html><head></head><body><script>Script</script></body></html>"
-        expected_html = "<html><head></head><body></body></html>"
-        soup = BeautifulSoup(html, "html.parser")
-        self.converter._strip_tags(soup)
-        self.assertEqual(str(soup), expected_html)
+def test_links(converter):
+    html = '<a href="/link" title="tooltip">Text</a>'
+    expected = r'[Text](/link "tooltip")'
+    assert converter.convert(html) == expected
 
-    def test_convert(self):
-        html = "<html><head></head><body><p>Hello World!</p></body></html>"
-        expected_markdown = "Hello World!"
-        markdown_content = self.converter.convert(html)
-        self.assertEqual(markdown_content, expected_markdown)
+def test_images(converter):
+    html = '<img src="img.jpg" alt="Alt text" title="Image">'
+    expected = '![Alt text](img.jpg "Image")'
+    assert converter.convert(html) == expected
 
+def test_special_chars(converter):
+    html = "<p>*Stars* &amp; &lt;tags&gt;</p>"
+    expected = r"\*Stars\* & <tags>"
+    assert converter.convert(html) == expected
 
-if __name__ == "__main__":
-    unittest.main()
+def test_element_removal(converter):
+    html = """
+    <header>Header</header>
+    <script>alert();</script>
+    <div class="cookie">Cookies</div>
+    <nav>Nav</nav>
+    """
+    assert converter.convert(html).strip() == ""
+
+def test_mixed_content(converter):
+    html = """
+    <div>
+        <h3>Mix</h3>
+        <p>Text with <em>emphasis</em></p>
+        <ul>
+            <li><a href="#"><strong>Bold</strong> link</a></li>
+        </ul>
+    </div>
+    """
+    expected = """
+### Mix
+
+Text with *emphasis*
+
+- [**Bold** link](#)
+    """.strip()
+    assert converter.convert(html) == expected
