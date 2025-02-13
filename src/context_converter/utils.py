@@ -1,6 +1,5 @@
 """
-Utility functions for file handling and dataset management.
-Maintains async I/O operations for better performance.
+File handling utilities with async I/O
 """
 
 import glob
@@ -10,13 +9,10 @@ import logging
 
 async def load_json_files(pattern):
     """
-    Load and merge JSON files matching glob pattern.
+    Load and merge JSON files matching glob pattern
     
-    Args:
-        pattern: File matching pattern (e.g., "data/*.json")
-        
-    Returns:
-        Combined list of JSON entries
+    :param pattern: File matching pattern (e.g., "data/*.json")
+    :return: Combined list of JSON entries
     """
     aggregated = []
     for file_path in glob.glob(pattern):
@@ -30,28 +26,25 @@ async def load_json_files(pattern):
 
 async def save_output_in_chunks(file_path, content):
     """
-    Append processed content to output file.
+    Append processed content to output file
     
-    Args:
-        file_path: Output file path
-        content: Markdown content to append
+    :param file_path: Output file path
+    :param content: Markdown content to append
     """
     try:
         async with aiofiles.open(file_path, "a", encoding="utf-8") as f:
             await f.write(content + "\n\n")
+            logging.debug(f"Wrote {len(content)} chars to {file_path}")
     except Exception as e:
         logging.error(f"Failed to write output: {str(e)}")
 
 def chunk_dataset(data, chunk_size):
     """
-    Split dataset into manageable chunks.
+    Split dataset into memory-safe chunks
     
-    Args:
-        data: Full dataset list
-        chunk_size: Entries per chunk
-        
-    Yields:
-        Sequential chunks of dataset
+    :param data: Full dataset list
+    :param chunk_size: Entries per chunk
+    :yield: Sequential chunks of dataset
     """
     for i in range(0, len(data), chunk_size):
         yield data[i:i + chunk_size]
