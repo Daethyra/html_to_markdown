@@ -1,30 +1,24 @@
 """
-Markdown formatting and structure management for dataset conversion.
-Maintains async processing capabilities for large datasets.
+Markdown formatting and structure management
 """
 
-import asyncio
 import logging
 
 class DatasetFormatter:
     def __init__(self, converter):
         """
-        Initialize formatter with HTML converter.
+        Initialize formatter with HTML converter
         
-        Args:
-            converter: HTMLToMarkdownConverter instance
+        :param converter: HTMLToMarkdownConverter instance
         """
         self.converter = converter
 
-    async def format_entry(self, entry):
+    def format_entry(self, entry):
         """
-        Process single JSON entry to Markdown format.
+        Process single JSON entry to Markdown format
         
-        Args:
-            entry: Dict with title, url, and html keys
-            
-        Returns:
-            Structured Markdown string for entry
+        :param entry: Dict with title, url, and html keys
+        :return: Structured Markdown string for entry
         """
         try:
             title = entry.get("title", "Untitled")
@@ -37,15 +31,12 @@ class DatasetFormatter:
 
     def _structure_entry(self, title, url, content):
         """
-        Create consistent Markdown structure for entries.
+        Create consistent Markdown structure for entries
         
-        Args:
-            title: Page/document title
-            url: Source URL
-            content: Converted Markdown content
-            
-        Returns:
-            Properly structured Markdown section
+        :param title: Page/document title
+        :param url: Source URL
+        :param content: Converted Markdown content
+        :return: Properly structured Markdown section
         """
         sections = [
             f"## {title}",
@@ -54,16 +45,15 @@ class DatasetFormatter:
         ]
         return "\n\n".join(filter(None, sections))
 
-    async def format_dataset(self, data):
+    def format_dataset(self, data):
         """
-        Process entire dataset with parallel execution.
+        Process entire dataset
         
-        Args:
-            data: List of JSON entries
-            
-        Returns:
-            Combined Markdown document string
+        :param data: List of JSON entries
+        :return: Combined Markdown document string
         """
-        tasks = [self.format_entry(entry) for entry in data]
-        results = await asyncio.gather(*tasks)
-        return "\n\n".join(filter(None, results))
+        return "\n\n".join(
+            self.format_entry(entry) 
+            for entry in data
+            if entry.get("html")
+        )
