@@ -1,6 +1,5 @@
 """
-Core HTML to Markdown conversion functionality with BeautifulSoup cleanup.
-Maintains essential HTML curation features while removing embeddings/similarity.
+Core HTML to Markdown conversion with BeautifulSoup cleanup
 """
 
 from bs4 import BeautifulSoup
@@ -10,11 +9,10 @@ import logging
 class HTMLToMarkdownConverter:
     def __init__(self, strip_tags=None, convert_links=True):
         """
-        Initialize HTML converter with cleanup rules.
+        Initialize HTML converter with cleanup rules
         
-        Args:
-            strip_tags: List of HTML tags to remove completely
-            convert_links: Whether to convert links to Markdown format
+        :param strip_tags: List of HTML tags to remove completely
+        :param convert_links: Convert links to Markdown format
         """
         self.strip_tags = strip_tags or ["script", "style", "meta", "nav", "footer"]
         self.convert_links = convert_links
@@ -25,26 +23,18 @@ class HTMLToMarkdownConverter:
 
     def convert(self, html_content):
         """
-        Convert HTML content to cleaned Markdown format.
+        Convert HTML content to cleaned Markdown format
         
-        Args:
-            html_content: Raw HTML string input
-            
-        Returns:
-            Cleaned Markdown content string
+        :param html_content: Raw HTML string input
+        :return: Cleaned Markdown content string
         """
         try:
-            curated_html = self._curate_content(html_content)
-            return self._html_to_markdown(curated_html)
+            soup = BeautifulSoup(html_content, "html.parser")
+            self._remove_unwanted_elements(soup)
+            return self._html_to_markdown(str(soup))
         except Exception as e:
             logging.error(f"Conversion error: {str(e)}")
             raise
-
-    def _curate_content(self, html):
-        """Clean HTML content before conversion"""
-        soup = BeautifulSoup(html, "html.parser")
-        self._remove_unwanted_elements(soup)
-        return str(soup)
 
     def _remove_unwanted_elements(self, soup):
         """Remove configured elements from BeautifulSoup tree"""
