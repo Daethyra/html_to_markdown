@@ -1,186 +1,189 @@
 """
-This script defines a class HTMLToMarkdownConverter that is responsible for converting HTML content to Markdown format and processing text embeddings. It uses the transformers library to load a pretrained model for generating embeddings, and the beautifulsoup4 and markdownify libraries to parse and convert HTML content to Markdown. The class also includes methods for removing redundant data based on semantic similarity, and for curating the HTML content by removing specified elements and tags.
+Core HTML to Markdown conversion with BeautifulSoup cleanup
 """
 
-from bs4 import BeautifulSoup
-from markdownify import markdownify as md
-from transformers import AutoTokenizer, AutoModel
-import torch
+from bs4 import BeautifulSoup, Comment
+from markdownify import MarkdownConverter
+import re
 import logging
-
 
 class HTMLToMarkdownConverter:
     def __init__(self, strip_tags=None, convert_links=True):
         """
-        Initializes the object with optional parameters.
-
-        Args:
-            strip_tags (list): List of tags to strip from the text. Defaults to ["script", "style", "meta"].
-            convert_links (bool): Flag to indicate whether to convert links. Defaults to True.
-
-        Returns:
-            None
+        Initialize HTML converter with cleanup rules
+        
+        :param strip_tags: List of HTML tags to remove completely
+        :param convert_links: Convert links to Markdown format
         """
-        self.strip_tags = strip_tags or ["script", "style", "meta"]
+        self.strip_tags = strip_tags or ["script", "style", "meta", "nav", "footer"]
         self.convert_links = convert_links
-        self.tokenizer, self.model = self._initialize_embedding_model()
-
-    def _initialize_embedding_model(self):
-        """
-        Initializes the embedding model by loading the tokenizer and model from the "jinaai/jina-embeddings-v2-small-en" 
-        pretrained checkpoints. Returns the initialized tokenizer and model.
-        """
-        tokenizer = AutoTokenizer.from_pretrained(
-            "jinaai/jina-embeddings-v2-small-en", trust_remote_code=True
-        )
-        model = AutoModel.from_pretrained("jinaai/jina-embeddings-v2-small-en")
-        return tokenizer, model
-
-    def mean_pooling(self, model_output, attention_mask):
-        """
-        Perform mean pooling on the token embeddings based on the attention mask.
-
-        Args:
-            model_output (torch.Tensor): The output of the model.
-            attention_mask (torch.Tensor): The attention mask.
-
-        Returns:
-            torch.Tensor: The result of mean pooling.
-        """
-        token_embeddings = model_output[0]
-        input_mask_expanded = (
-            attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-        )
-        sum_embeddings = torch.sum(token_embeddings * input_mask_expanded, 1)
-        sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-        return sum_embeddings / sum_mask
-
-    def _process_embeddings(self, lines, batch_size=16):
-        """
-        Process embeddings for the given lines using batch processing.
-
-        Args:
-            lines (list): The list of input lines for which embeddings need to be processed.
-            batch_size (int, optional): The size of each batch for processing. Defaults to 16.
-
-        Returns:
-            torch.Tensor: Normalized batched embeddings.
-        """
-        batched_embeddings = []
-        for i in range(0, len(lines), batch_size):
-            batch = lines[i : i + batch_size]
-            encoded_input = self.tokenizer(
-                batch, padding=True, truncation=True, return_tensors="pt"
-            )
-            with torch.no_grad():
-                model_output = self.model(**encoded_input)
-            batch_embeddings = self.mean_pooling(
-                model_output, encoded_input["attention_mask"]
-            )
-            batched_embeddings.extend(batch_embeddings)
-
-        return torch.nn.functional.normalize(
-            torch.stack(batched_embeddings), p=2, dim=1
-        )
-
-    def _remove_redundant_data(self, embeddings, lines):
-        """
-        Remove redundant data from a list of lines based on cosine similarity between consecutive embeddings.
-
-        Parameters:
-            embeddings (torch.Tensor): A tensor of embeddings.
-            lines (List[str]): A list of strings representing lines of text.
-
-        Returns:
-            str: A string representing the cleaned lines of text with redundant data removed.
-        """
-        cleaned_lines = [lines[0]]  # Always include the first line
-        for i in range(1, len(lines)):
-            similarity = torch.cosine_similarity(
-                embeddings[i].unsqueeze(0), embeddings[i - 1].unsqueeze(0)
-            )
-            if similarity.item() < 0.86899:  # Threshold for redundancy
-                cleaned_lines.append(lines[i])
-        return "\n".join(cleaned_lines)
+        self._remove_selectors = [
+            "header", ".navbar", ".menu", "#sidebar",
+            "#ad-container", 'div[class*="cookie"]', "aside", "form"
+        ]
+        self.current_conversion_blocks = []  # Per-conversion code block storage
 
     def convert(self, html_content):
         """
-        Convert the given HTML content to markdown format.
-
-        Args:
-            html_content (str): The HTML content to be converted.
-
-        Returns:
-            list: The processed embeddings with redundant data removed.
-        Raises:
-            Exception: If an error occurs during the conversion process.
+        Convert HTML content to cleaned Markdown format
+        
+        :param html_content: Raw HTML string input
+        :return: Cleaned Markdown content string
         """
         try:
-            curated_html = self._curate_content(html_content)
-            markdown_content = md(
-                curated_html,
-                strip_tags=self.strip_tags,
-                convert_links=self.convert_links,
-            ).strip()
-            lines = markdown_content.split("\n")
-            embeddings = self._process_embeddings(lines)
-            return self._remove_redundant_data(embeddings, lines)
+            self.current_conversion_blocks = []
+            soup = BeautifulSoup(html_content, "html.parser")
+            self._remove_unwanted_elements(soup)
+            self._preserve_code_blocks(soup)
+            self._wrap_raw_backticks(soup)  # New raw backtick handling
+            return self._html_to_markdown(str(soup))
         except Exception as e:
-            logging.error("Error during conversion: %s", e)
+            logging.error(f"Conversion error: {str(e)}")
+            raise
+        finally:
+            self.current_conversion_blocks = []
+
+    def _preserve_code_blocks(self, soup):
+        """Handle formal code blocks with existing backtick sequences"""
+        try:
+            for pre in soup.find_all('pre'):
+                code = pre.find('code')
+                if code:
+                    # Escape and store code content
+                    content = code.text.replace('`', '\u200b`\u200b')
+                    lang = self._get_code_language(code)
+                    
+                    self.current_conversion_blocks.append({
+                        'content': content,
+                        'language': lang
+                    })
+                    placeholder = f"CODEBLOCK_{len(self.current_conversion_blocks)-1}_END"
+                    code.replace_with(placeholder)
+        except Exception as e:
+            logging.error(f"Code block preservation failed: {str(e)}")
             raise
 
-    def _curate_content(self, html):
-        """
-        Curates the HTML content by parsing it with BeautifulSoup, removing selectors, 
-        and stripping tags. Returns the curated HTML content as a string. 
-        """
-        try:
-            soup = BeautifulSoup(html, "html.parser")
-            self._remove_selectors(soup)
-            self._strip_tags(soup)
-            return str(soup)
-        except Exception as e:
-            logging.error("Error in curating HTML content: %s", e)
-            return html
+    def _wrap_raw_backticks(self, soup):
+        """Detect and wrap loose backtick sequences in code blocks"""
+        for text_node in soup.find_all(string=True):
+            if re.search(r'`{3,}', text_node):
+                new_pre = soup.new_tag('pre')
+                new_code = soup.new_tag('code')
+                new_code.string = text_node
+                new_pre.append(new_code)
+                text_node.replace_with(new_pre)
 
-    def _remove_selectors(self, soup):
-        """
-        Remove specified selectors from the given BeautifulSoup object.
+    def _get_code_language(self, element):
+        """Detect code language from class names"""
+        classes = element.get('class', [])
+        for cls in classes:
+            if cls.startswith('language-'):
+                return cls.split('-', 1)[1]
+            if cls in ['python', 'js', 'javascript', 'html', 'css', 'bash']:
+                return cls
+        return ''
 
-        Parameters:
-        - soup: the BeautifulSoup object to remove selectors from (BeautifulSoup)
+    def _remove_unwanted_elements(self, soup):
+        """Comprehensive HTML cleanup"""
+        # Remove comments
+        for comment in soup.find_all(string=lambda t: isinstance(t, Comment)):
+            comment.extract()
 
-        Returns:
-        - None
-        """
-        selectors = [
-            "header",
-            "footer",
-            "nav",
-            ".navbar",
-            ".menu",
-            ".footer-links",
-            "#sidebar",
-            "#ad-container",
-            'div[class*="cookie"], div[class*="banner"]',
-            "aside",
-            ".pagination",
-            "form",
-        ]
-        for selector in selectors:
-            for element in soup.select(selector):
-                element.decompose()
+        # Remove by CSS selectors
+        for selector in self._remove_selectors:
+            for el in soup.select(selector):
+                el.decompose()
 
-    def _strip_tags(self, soup):
-        """
-        Strip specified tags from the given BeautifulSoup object.
-
-        Parameters:
-            soup (BeautifulSoup): The BeautifulSoup object to strip tags from.
-
-        Returns:
-            None
-        """
+        # Remove by tag names
         for tag in self.strip_tags:
-            for s in soup(tag):
-                s.decompose()
+            for el in soup.find_all(tag):
+                el.decompose()
+
+        # Clean empty containers
+        for el in soup.find_all():
+            if not el.contents and not el.text.strip():
+                el.decompose()
+
+    def _html_to_markdown(self, html):
+        """Convert HTML to Markdown with proper block state handling"""
+        class CodeSafeConverter(MarkdownConverter):
+            def __init__(self, blocks=None, **kwargs):
+                super().__init__(**kwargs)
+                self.blocks = blocks or []  # Initialize blocks properly
+
+            def convert_pre(self, el, text, convert_as_inline=False):
+                match = re.search(r'CODEBLOCK_(\d+)_END', text)
+                if match:
+                    idx = int(match.group(1))
+                    try:
+                        block = self.blocks[idx]
+                        content = block['content'].replace('\u200b`\u200b', '`')
+                        max_backticks = max(len(m.group(0)) for m in re.finditer(r'`+', content)) if '`' in content else 0
+                        fence_length = max(4, max_backticks + 1)
+                        fence = '`' * fence_length
+                        lang = f"{block['language']}\n" if block['language'] else ''
+                        return f"\n{fence}{lang}{content}\n{fence}\n"
+                    except IndexError:
+                        logging.error(f"Missing code block at index {idx}")
+                return super().convert_pre(el, text, convert_as_inline)
+
+        # Pass blocks explicitly to the converter
+        converter = CodeSafeConverter(
+            blocks=self.current_conversion_blocks,
+            heading_style="ATX",
+            bullets="-*",
+            strip=self.strip_tags,
+            convert_links=self.convert_links,
+            escape_underscores=False
+        )
+        
+        markdown = converter.convert(html)
+        return self._normalize_code_fences(markdown)
+
+    def _normalize_code_fences(self, markdown):
+        """Finalize code fence formatting"""
+        # Clean temporary fence markers
+        markdown = re.sub(r'(`+)x0', r'\1', markdown)
+        
+        lines = markdown.split('\n')
+        output = []
+        fence_stack = []
+        current_fence = None
+
+        for line in lines:
+            fence_match = re.match(r'^(?P<fence>`{4,})', line)
+            if fence_match:
+                fence = fence_match.group('fence')
+                if not fence_stack:
+                    fence_stack.append(fence)
+                    output.append(fence)
+                else:
+                    expected = fence_stack.pop()
+                    output.append(expected)
+            else:
+                output.append(line)
+
+        # Close any remaining open fences
+        while fence_stack:
+            output.append(fence_stack.pop())
+
+        # Escape loose triple+ backticks outside code blocks
+        return self._escape_loose_backticks('\n'.join(output))
+
+    def _escape_loose_backticks(self, markdown):
+        """Escape remaining backtick sequences in normal text"""
+        in_code_block = False
+        buffer = []
+        
+        for line in markdown.split('\n'):
+            if line.strip().startswith('```'):
+                in_code_block = not in_code_block
+                buffer.append(line)
+                continue
+            
+            if not in_code_block:
+                line = re.sub(r'(?<!`)``+(?!`)', lambda m: '\\' * len(m.group(0)) + m.group(0), line)
+            
+            buffer.append(line)
+        
+        return '\n'.join(buffer)

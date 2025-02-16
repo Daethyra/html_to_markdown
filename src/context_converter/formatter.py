@@ -1,96 +1,103 @@
 """
-This module contains the DatasetFormatter class which is used to format a dataset of HTML entries into structured Markdown.
-
-The DatasetFormatter class uses an instance of the HTMLToMarkdownConverter class to convert HTML content to Markdown. It provides methods to format individual entries and entire datasets.
-
-Classes:
-    DatasetFormatter: A class to format a dataset of HTML entries into structured Markdown. It provides methods to format individual entries, structure the Markdown content, and format entire datasets.
+Markdown formatting and structure management
 """
 
-import asyncio
-from converter import HTMLToMarkdownConverter
 import logging
-
+import re
 
 class DatasetFormatter:
-    """
-    A class to format a dataset of HTML entries into structured Markdown.
-
-    Attributes:
-        converter (HTMLToMarkdownConverter): An instance of \
-            HTMLToMarkdownConverter for HTML to Markdown conversion.
-
-    Methods:
-        format_entry(entry): Formats a single dataset entry into Markdown.
-        structure_markdown(title, url, content): Structures \
-            Markdown content with headers and links.
-        format_dataset(data): Formats an entire dataset \
-            of entries into Markdown.
-    """
-
     def __init__(self, converter):
         """
-        Initializes the class with a converter object.
-
-        Parameters:
-            converter: The converter object to be used by the class.
-
-        Returns:
-            None
+        Initialize formatter with HTML converter
+        
+        :param converter: HTMLToMarkdownConverter instance
         """
         self.converter = converter
 
-    async def format_entry(self, entry):
+    def format_entry(self, entry):
         """
-        Asynchronously formats an entry and returns the structured markdown content.
-
-        Args:
-            self: The object instance
-            entry: The entry to be formatted
-
-        Returns:
-            The structured markdown content of the entry
+        Process single JSON entry to Markdown format
+        
+        :param entry: Dict with title, url, and html keys
+        :return: Structured Markdown string for entry
         """
         try:
             title = entry.get("title", "Untitled")
             url = entry.get("url", "")
-            html_content = entry.get("html", "")
-            logging.info("Formatted entry: %s", title)
-            markdown_content = self.converter.convert(html_content)
-            return self.structure_markdown(title, url, markdown_content)
+            content = self.converter.convert(entry.get("html", ""))
+            return self._structure_entry(title, url, content)
         except Exception as e:
-            logging.error("Error formatting entry: %s", e)
+            logging.error(f"Entry formatting failed: {str(e)}")
             return ""
 
-    def structure_markdown(self, title, url, content):
+    def _structure_entry(self, title, url, content):
         """
-        Generates structured markdown content based on the provided title, URL, and content.
-
-        :param title: The title for the markdown content
-        :param url: The URL for the markdown content, can be empty
-        :param content: The main content for the markdown
-        :return: The structured markdown content
+        Create consistent Markdown structure for entries
+        
+        :param title: Page/document title
+        :param url: Source URL
+        :param content: Converted Markdown content
+        :return: Properly structured Markdown section
         """
-        structured_content = f"## {title}\n\n"
-        if url:
-            structured_content += f"[Read More]({url})\n\n"
-        structured_content += (
-            content.strip()
-        )  # Remove leading and trailing whitespace/newlines
-        return structured_content
+        sections = [
+            f"<!-- Entry start: {title} -->",
+            f"## {title}",
+            f"[Source]({url})" if url else "",
+            self._escape_md_in_content(content.strip()),
+            "<!-- Entry end -->"
+        ]
+        return "\n\n".join([s for s in sections if s.strip()])
 
-    async def format_dataset(self, data):
+    def _escape_md_in_content(self, content):
+        """Safer escaping that preserves code block context"""
+        lines = []
+        code_block_depth = 0
+        current_fence = None
+        
+        for line in content.split('\n'):
+            fence_match = re.match(r'^(?P<fence>`{3,})', line)
+            if fence_match:
+                if not current_fence:
+                    code_block_depth += 1
+                    current_fence = fence_match.group('fence')
+                elif line.strip() == current_fence:
+                    code_block_depth -= 1
+                    current_fence = None
+                lines.append(line)
+                continue
+            
+            if code_block_depth > 0:
+                lines.append(line)
+            else:
+                line = re.sub(r'(?<!\\)([#*_~|<>\[\]{}`-])', r'\\\1', line)
+                lines.append(line)
+        
+        return '\n'.join(lines)
+
+    def _escape_markdown_syntax(self, line):
+        """Escape Markdown special characters outside code blocks"""
+        # Escape headers
+        line = re.sub(r'^(#{1,6})(?!#)', lambda m: '\\' * len(m.group(1)) + m.group(1), line)
+        
+        # Escape other special characters
+        special_chars = r'*_{}[]()#+-.!|`~'
+        for char in special_chars:
+            line = line.replace(char, f'\\{char}')
+        
+        # Preserve links and images
+        line = re.sub(r'(!?\[.*?\])(\()', lambda m: m.group(1).replace('\\', '') + m.group(2), line)
+        
+        return line
+
+    def format_dataset(self, data):
         """
-        Asynchronously formats the dataset.
-
-        Args:
-            self: The object instance.
-            data: The dataset to be formatted.
-
-        Returns:
-            str: The formatted dataset as a string.
+        Process entire dataset
+        
+        :param data: List of JSON entries
+        :return: Combined Markdown document string
         """
-        formatted_entries = await asyncio.gather(
-            *(self.format_entry(entry) for entry in data)
+        return "\n\n".join(
+            self.format_entry(entry) 
+            for entry in data
+            if entry.get("html")
         )
-        return "\n\n".join(formatted_entries)
